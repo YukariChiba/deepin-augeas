@@ -1,13 +1,13 @@
 /* safe-alloc.h: safer memory allocation
 
-   Copyright (C) 2009-2019 Free Software Foundation, Inc.
+   Copyright (C) 2009-2022 Free Software Foundation, Inc.
 
-   This program is free software: you can redistribute it and/or modify it
-   under the terms of the GNU Lesser General Public License as published by the
-   Free Software Foundation; either version 2.1 of the License, or any
-   later version.
+   This file is free software: you can redistribute it and/or modify
+   it under the terms of the GNU Lesser General Public License as
+   published by the Free Software Foundation; either version 2.1 of the
+   License, or (at your option) any later version.
 
-   This program is distributed in the hope that it will be useful,
+   This file is distributed in the hope that it will be useful,
    but WITHOUT ANY WARRANTY; without even the implied warranty of
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
    GNU Lesser General Public License for more details.
@@ -15,93 +15,89 @@
    You should have received a copy of the GNU Lesser General Public License
    along with this program.  If not, see <https://www.gnu.org/licenses/>.  */
 
-/* Written by Daniel Berrange <berrange@redhat.com>, 2008 */
+/* Written by Daniel Berrange and Paul Eggert.  */
 
 #ifndef SAFE_ALLOC_H_
-# define SAFE_ALLOC_H_
+#define SAFE_ALLOC_H_
 
-# include <stdlib.h>
+#include <stdlib.h>
 
-#ifndef __GNUC_PREREQ
-# if defined __GNUC__ && defined __GNUC_MINOR__
-#  define __GNUC_PREREQ(maj, min)                                       \
-  ((__GNUC__ << 16) + __GNUC_MINOR__ >= ((maj) << 16) + (min))
-# else
-#  define __GNUC_PREREQ(maj, min) 0
-# endif
+#ifndef _GL_INLINE_HEADER_BEGIN
+   #error "Please include config.h first."
+#endif
+_GL_INLINE_HEADER_BEGIN
+#ifndef SAFE_ALLOC_INLINE
+# define SAFE_ALLOC_INLINE _GL_INLINE
 #endif
 
-# ifndef _GL_ATTRIBUTE_RETURN_CHECK
-#  if __GNUC_PREREQ (3, 4)
-#   define _GL_ATTRIBUTE_RETURN_CHECK __attribute__((__warn_unused_result__))
-#  else
-#   define _GL_ATTRIBUTE_RETURN_CHECK
-#  endif
-# endif
-
-/* Don't call these directly - use the macros below */
-int
-safe_alloc_alloc_n (void *ptrptr, size_t size, size_t count, int zeroed)
-  _GL_ATTRIBUTE_RETURN_CHECK;
-
-int
-safe_alloc_realloc_n (void *ptrptr, size_t size, size_t count)
-  _GL_ATTRIBUTE_RETURN_CHECK;
+/* Don't call these directly - use the macros below.  */
+SAFE_ALLOC_INLINE void *
+safe_alloc_realloc_n (void *ptr, size_t count, size_t size)
+{
+  if (count == 0 || size == 0)
+    count = size = 1;
+  return reallocarray (ptr, count, size);
+}
+_GL_ATTRIBUTE_NODISCARD SAFE_ALLOC_INLINE int
+safe_alloc_check (void *ptr)
+{
+  /* Return 0 if the allocation was successful, -1 otherwise.  */
+  return -!ptr;
+}
 
 /**
  * ALLOC:
- * @ptr: pointer to hold address of allocated memory
+ * @ptr: pointer to allocated memory
  *
- * Allocate sizeof(*ptr) bytes of memory and store
- * the address of allocated memory in 'ptr'. Fill the
+ * Allocate sizeof *ptr bytes of memory and store
+ * the address of allocated memory in 'ptr'.  Fill the
  * newly allocated memory with zeros.
  *
- * Return -1 on failure to allocate, zero on success
+ * Return -1 on failure to allocate, zero on success.
  */
-# define ALLOC(ptr)                                     \
-  safe_alloc_alloc_n (&(ptr), sizeof (*(ptr)), 1, 1)
+#define ALLOC(ptr) ALLOC_N (ptr, 1)
 
 /**
  * ALLOC_N:
- * @ptr: pointer to hold address of allocated memory
+ * @ptr: pointer to allocated memory
  * @count: number of elements to allocate
  *
- * Allocate an array of 'count' elements, each sizeof(*ptr)
+ * Allocate an array of 'count' elements, each sizeof *ptr
  * bytes long and store the address of allocated memory in
- * 'ptr'. Fill the newly allocated memory with zeros.
+ * 'ptr'.  Fill the newly allocated memory with zeros.
  *
- * Return -1 on failure, 0 on success
+ * Return -1 on failure, 0 on success.
  */
-# define ALLOC_N(ptr, count)                                    \
-  safe_alloc_alloc_n (&(ptr), sizeof (*(ptr)), (count), 1)
+#define ALLOC_N(ptr, count) \
+  safe_alloc_check ((ptr) = calloc (count, sizeof *(ptr)))
 
 /**
  * ALLOC_N_UNINITIALIZED:
- * @ptr: pointer to hold address of allocated memory
+ * @ptr: pointer to allocated memory
  * @count: number of elements to allocate
  *
- * Allocate an array of 'count' elements, each sizeof(*ptr)
+ * Allocate an array of 'count' elements, each sizeof *ptr
  * bytes long and store the address of allocated memory in
- * 'ptr'. Do not initialize the new memory at all.
+ * 'ptr'.  Do not initialize the new memory at all.
  *
- * Return -1 on failure to allocate, zero on success
+ * Return -1 on failure to allocate, zero on success.
  */
-# define ALLOC_N_UNINITIALIZED(ptr, count)                      \
-  safe_alloc_alloc_n (&(ptr), sizeof (*(ptr)), (count), 0)
+#define ALLOC_N_UNINITIALIZED(ptr, count) \
+  safe_alloc_check ((ptr) = safe_alloc_realloc_n (NULL, count, sizeof *(ptr)))
 
 /**
  * REALLOC_N:
- * @ptr: pointer to hold address of allocated memory
+ * @ptr: pointer to allocated memory
  * @count: number of elements to allocate
  *
- * Re-allocate an array of 'count' elements, each sizeof(*ptr)
+ * Re-allocate an array of 'count' elements, each sizeof *ptr
  * bytes long and store the address of allocated memory in
- * 'ptr'. Fill the newly allocated memory with zeros
+ * 'ptr'.  Fill the newly allocated memory with zeros.
  *
- * Return -1 on failure to reallocate, zero on success
+ * Return -1 on failure to reallocate, zero on success.
  */
-# define REALLOC_N(ptr, count)                                  \
-  safe_alloc_realloc_n (&(ptr), sizeof (*(ptr)), (count))
+#define REALLOC_N(ptr, count) \
+  safe_alloc_check ((ptr) = safe_alloc_realloc_n (ptr, count, sizeof *(ptr)))
 
 /**
  * FREE:
@@ -110,12 +106,8 @@ safe_alloc_realloc_n (void *ptrptr, size_t size, size_t count)
  * Free the memory stored in 'ptr' and update to point
  * to NULL.
  */
-# define FREE(ptr)                              \
-  do                                            \
-    {                                           \
-      free (ptr);                               \
-      (ptr) = NULL;                             \
-    }                                           \
-  while (0)
+#define FREE(ptr) ((void) (free (ptr), (ptr) = NULL))
+
+_GL_INLINE_HEADER_END
 
 #endif /* SAFE_ALLOC_H_ */

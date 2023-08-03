@@ -1,3 +1,23 @@
+augeas (1.14.0-1) unstable; urgency=medium
+
+  [ Hilko Bengen ]
+  * New upstream version 1.14.0
+  * Update patches
+  * Update install file
+
+  [ Micah Anderson ]
+  * Remove myself from debian/control Uploaders field
+
+ -- Hilko Bengen <bengen@debian.org>  Sun, 11 Dec 2022 17:16:46 +0100
+
+augeas (1.13.0-1) unstable; urgency=medium
+
+  * New upstream version 1.13.0
+  * Drop patch integrated upstream
+  * Update symbols file
+
+ -- Hilko Bengen <bengen@debian.org>  Fri, 24 Dec 2021 13:03:12 +0100
+
 augeas (1.12.0-2) unstable; urgency=medium
 
   * Add patch for postfix master.cf (Closes: #930888)

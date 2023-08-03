@@ -1,7 +1,6 @@
 Source: augeas
 Priority: optional
 Maintainer: Hilko Bengen <bengen@debian.org>
-Uploaders:  Micah Anderson <micah@debian.org>
 Build-Depends: debhelper (>= 12),
  libreadline-dev,
  libselinux1-dev [linux-any],

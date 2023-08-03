@@ -7,13 +7,13 @@ Subject: Add Debian-specific paths for ClamAV configuration files
  1 file changed, 3 insertions(+)
 
 diff --git a/lenses/clamav.aug b/lenses/clamav.aug
-index eeb08c0..df5041a 100644
+index 12bb104..8c1d6f3 100644
 --- a/lenses/clamav.aug
 +++ b/lenses/clamav.aug
-@@ -48,5 +48,8 @@ let lns = (Util.empty | example_entry | clamd_entry | comment )*
- let filter = (incl "/etc/clamd.conf")
+@@ -49,5 +49,8 @@ let filter = (incl "/etc/clamd.conf")
              . (incl "/etc/freshclam.conf")
              . (incl "/etc/clamd.d/*.conf")
+             . (incl "/etc/clamav/*.conf")
 +            . (incl "/etc/clamav/clamd.conf")
 +            . (incl "/etc/clamav/freshclam.conf")
 +            . (incl "/etc/clamav/clamd.d/*.conf")

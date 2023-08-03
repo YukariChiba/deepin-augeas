@@ -1,6 +1,6 @@
 # source this file; set up for tests
 
-# Copyright (C) 2009-2019 Free Software Foundation, Inc.
+# Copyright (C) 2009-2022 Free Software Foundation, Inc.
 
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -129,6 +129,8 @@ else
 fi
 
 # We require $(...) support unconditionally.
+# We require that the printf built-in work correctly regarding octal escapes;
+# this eliminates /bin/sh on AIX 7.2.
 # We require non-surprising "local" semantics (this eliminates dash).
 # This takes the admittedly draconian step of eliminating dash, because the
 # assignment tab=$(printf '\t') works fine, yet preceding it with "local "
@@ -158,6 +160,12 @@ fi
 #  ? - not ok
 gl_shell_test_script_='
 test $(echo y) = y || exit 1
+LC_ALL=en_US.UTF-8 printf "\\351" 2>/dev/null \
+  | LC_ALL=C tr "\\351" x | LC_ALL=C grep "^x$" > /dev/null \
+  || exit 1
+printf "\\351" 2>/dev/null \
+  | LC_ALL=C tr "\\351" x | LC_ALL=C grep "^x$" > /dev/null \
+  || exit 1
 f_local_() { local v=1; }; f_local_ || exit 1
 f_dash_local_fail_() { local t=$(printf " 1"); }; f_dash_local_fail_
 score_=10
@@ -263,12 +271,10 @@ test -n "$EXEEXT" && test -n "$BASH_VERSION" && shopt -s expand_aliases
 #
 # First, try to use the mktemp program.
 # Failing that, we'll roll our own mktemp-like function:
-#  - try to get random bytes from /dev/urandom
+#  - try to get random bytes from /dev/urandom, mapping them to file-name bytes
 #  - failing that, generate output from a combination of quickly-varying
-#      sources and gzip.  Ignore non-varying gzip header, and extract
-#      "random" bits from there.
-#  - given those bits, map to file-name bytes using tr, and try to create
-#      the desired directory.
+#      sources and awk.
+#  - try to create the desired directory.
 #  - make only $MAX_TRIES_ attempts
 
 # Helper function.  Print $N pseudo-random bytes from a-zA-Z0-9.
@@ -288,20 +294,27 @@ rand_bytes_ ()
     return
   fi
 
-  n_plus_50_=`expr $n_ + 50`
-  cmds_='date; date +%N; free; who -a; w; ps auxww; ps -ef'
-  data_=` (eval "$cmds_") 2>&1 | gzip `
+  # Fall back on quickly-varying sources + awk.
+  # Limit awk program to 7th Edition Unix so that it works even on Solaris 10.
 
-  # Ensure that $data_ has length at least 50+$n_
-  while :; do
-    len_=`echo "$data_"|wc -c`
-    test $n_plus_50_ -le $len_ && break;
-    data_=` (echo "$data_"; eval "$cmds_") 2>&1 | gzip `
-  done
-
-  echo "$data_" \
-    | dd bs=1 skip=50 count=$n_ 2>/dev/null \
-    | LC_ALL=C tr -c $chars_ 01234567$chars_$chars_$chars_
+  (date; date +%N; free; who -a; w; ps auxww; ps -ef) 2>&1 | awk '
+     BEGIN {
+       n = '"$n_"'
+       for (i = 0; i < 256; i++)
+         ordinal[sprintf ("%c", i)] = i
+     }
+     {
+       for (i = 1; i <= length; i++)
+         a[ai++ % n] += ordinal[substr ($0, i, 1)]
+     }
+     END {
+       chars = "'"$chars_"'"
+       charslen = length (chars)
+       for (i = 0; i < n; i++)
+         printf "%s", substr (chars, a[i] % charslen + 1, 1)
+       printf "\n"
+     }
+  '
 }
 
 mktempd_ ()
@@ -381,7 +394,7 @@ setup_ ()
   if test "$VERBOSE" = yes; then
     # Test whether set -x may cause the selected shell to corrupt an
     # application's stderr.  Many do, including zsh-4.3.10 and the /bin/sh
-    # from SunOS 5.11, OpenBSD 4.7 and Irix 5.x and 6.5.
+    # from SunOS 5.11, OpenBSD 4.7 and Irix 6.5.
     # If enabling verbose output this way would cause trouble, simply
     # issue a warning and refrain.
     if $gl_set_x_corrupts_stderr_; then
@@ -418,6 +431,23 @@ setup_ ()
   for sig_ in 1 2 3 13 15; do
     eval "trap 'Exit $(expr $sig_ + 128)' $sig_"
   done
+
+  # Remove relative and non-accessible directories from PATH, including '.'
+  # and Zero-length entries.
+  saved_IFS="$IFS"
+  IFS=:
+  new_PATH=
+  sep_=
+  for dir in $PATH; do
+    case "$dir" in
+      /*) test -d "$dir/." || continue
+          new_PATH="${new_PATH}${sep_}${dir}"
+          sep_=':';;
+    esac
+  done
+  IFS="$saved_IFS"
+  PATH="$new_PATH"
+  export PATH
 }
 
 # This is a stub function that is run upon trap (upon regular exit and
@@ -672,4 +702,4 @@ test -f "$srcdir/init.cfg" \
 setup_ "$@"
 # This trap is here, rather than in the setup_ function, because some
 # shells run the exit trap at shell function exit, rather than script exit.
-trap remove_tmp_ 0
+trap remove_tmp_ EXIT

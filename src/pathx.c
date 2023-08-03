@@ -35,7 +35,7 @@ static const char *const errcodes[] = {
     "no error",
     "empty name",
     "illegal string literal",
-    "illegal number",
+    "illegal number",                             /* PATHX_ENUMBER */
     "string missing ending ' or \"",
     "expected '='",
     "allocation failed",
@@ -86,6 +86,7 @@ enum binary_op {
     OP_STAR,       /* '*'  */
     OP_AND,        /* 'and' */
     OP_OR,         /* 'or' */
+    OP_ELSE,       /* 'else' */
     OP_RE_MATCH,   /* '=~' */
     OP_RE_NOMATCH, /* '!~' */
     OP_UNION       /* '|' */
@@ -99,6 +100,7 @@ struct pred {
 enum axis {
     SELF,
     CHILD,
+    SEQ,
     DESCENDANT,
     DESCENDANT_OR_SELF,
     PARENT,
@@ -112,6 +114,7 @@ enum axis {
 static const char *const axis_names[] = {
     "self",
     "child",
+    "seq",        /* Like child, but only selects node-names which are integers */
     "descendant",
     "descendant-or-self",
     "parent",
@@ -202,6 +205,7 @@ struct expr {
             enum binary_op op;
             struct expr *left;
             struct expr *right;
+            bool   left_matched;
         };
         value_ind_t      value_ind;    /* E_VALUE */
         char            *ident;        /* E_VAR */
@@ -266,6 +270,10 @@ struct state {
     /* Error structure, used to communicate errors to struct augeas;
      * we never own this structure, and therefore never free it */
     struct error        *error;
+    /* If a filter-expression contains the 'else' operator, we need
+     * we need to evaluate the filter twice. The has_else flag
+     * means we don't do this unless we really need to */
+    bool                 has_else;
 };
 
 /* We consider NULL and the empty string to be equal */
@@ -300,6 +308,7 @@ static void func_regexp_flag(struct state *state, int nargs);
 static void func_glob(struct state *state, int nargs);
 static void func_int(struct state *state, int nargs);
 static void func_not(struct state *state, int nargs);
+static void func_modified(struct state *state, int nargs);
 
 static const enum type arg_types_nodeset[] = { T_NODESET };
 static const enum type arg_types_string[] = { T_STRING };
@@ -341,6 +350,8 @@ static const struct func builtin_funcs[] = {
       .arg_types = arg_types_nodeset, .impl = func_int, .pure = false },
     { .name = "int", .arity = 1, .type = T_NUMBER,
       .arg_types = arg_types_bool, .impl = func_int, .pure = false },
+    { .name = "modified", .arity = 0, .type = T_BOOLEAN,
+      .arg_types = NULL, .impl = func_modified, .pure = false },
     { .name = "not", .arity = 1, .type = T_BOOLEAN,
       .arg_types = arg_types_bool, .impl = func_not, .pure = true }
 };
@@ -724,6 +735,12 @@ static void func_int(struct state *state, int nargs) {
     push_value(vind, state);
 }
 
+static void func_modified(struct state *state, int nargs) {
+    ensure_arity(0, 0);
+
+    push_boolean_value(state->ctx->dirty , state);
+}
+
 static void func_not(struct state *state, int nargs) {
     ensure_arity(1, 1);
     RET_ON_ERROR;
@@ -985,6 +1002,54 @@ static void eval_and_or(struct state *state, enum binary_op op) {
         push_boolean_value(left || right, state);
 }
 
+static void eval_else(struct state *state, struct expr *expr, struct locpath_trace *lpt_right) {
+    struct value *r = pop_value(state);
+    struct value *l = pop_value(state);
+
+    if ( l->tag == T_NODESET && r->tag == T_NODESET ) {
+        int discard_maxns=0;
+        struct nodeset **discard_ns=NULL;
+        struct locpath_trace *lpt = state->locpath_trace;
+        value_ind_t vind = make_value(T_NODESET, state);
+        if (l->nodeset->used >0 || expr->left_matched) {
+            expr->left_matched = 1;
+            state->value_pool[vind].nodeset = clone_nodeset(l->nodeset, state);
+            if( lpt_right != NULL ) {
+                discard_maxns = lpt_right->maxns;
+                discard_ns    = lpt_right->ns;
+            }
+        } else {
+            state->value_pool[vind].nodeset = clone_nodeset(r->nodeset, state);
+            if( lpt != NULL && lpt_right != NULL ) {
+                discard_maxns = lpt->maxns;
+                discard_ns    = lpt->ns;
+                lpt->maxns = lpt_right->maxns;
+                lpt->ns    = lpt_right->ns;
+                lpt->lp    = lpt_right->lp;
+            }
+        }
+        push_value(vind, state);
+        if ( lpt != NULL && lpt_right != NULL ) {
+            for (int i=0; i < discard_maxns; i++)
+                free_nodeset(discard_ns[i]);
+            FREE(discard_ns);
+        }
+    } else {
+        bool left = coerce_to_bool(l);
+        bool right = coerce_to_bool(r);
+
+        expr->left_matched = expr->left_matched || left;
+        if (expr->left_matched) {
+            /* One or more LHS have matched, so we're not interested in the right expr */
+            push_boolean_value(left, state);
+        } else {
+            /* no LHS has matched (yet), so keep the right expr */
+            /* If this is the 2nd pass, and expr->left_matched is true, no RHS nodes will be included */
+            push_boolean_value(right, state);
+        }
+    }
+}
+
 static bool eval_re_match_str(struct state *state, struct regexp *rx,
                               const char *str) {
     int r;
@@ -1003,11 +1068,12 @@ static bool eval_re_match_str(struct state *state, struct regexp *rx,
     return r == strlen(str);
 }
 
-static void eval_union(struct state *state) {
+static void eval_union(struct state *state, struct locpath_trace *lpt_right) {
     value_ind_t vind = make_value(T_NODESET, state);
     struct value *r = pop_value(state);
     struct value *l = pop_value(state);
     struct nodeset *res = NULL;
+    struct locpath_trace *lpt = state->locpath_trace;
 
     assert(l->tag == T_NODESET);
     assert(r->tag == T_NODESET);
@@ -1023,6 +1089,13 @@ static void eval_union(struct state *state) {
     }
     state->value_pool[vind].nodeset = res;
     push_value(vind, state);
+
+    if( lpt != NULL && lpt_right != NULL ) {
+        STATE_ERROR(state, PATHX_EMMATCH);
+        for (int i=0; i < lpt_right->maxns; i++)
+            free_nodeset(lpt_right->ns[i]);
+        FREE(lpt_right->ns);
+    }
  error:
     ns_clear_added(res);
 }
@@ -1085,8 +1158,16 @@ static void eval_re_match(struct state *state, enum binary_op op) {
 }
 
 static void eval_binary(struct expr *expr, struct state *state) {
+    struct locpath_trace *lpt = state->locpath_trace;
+    struct locpath_trace lpt_right;
+
     eval_expr(expr->left, state);
+    if ( lpt != NULL && expr->type == T_NODESET ) {
+       MEMZERO(&lpt_right, 1);
+       state->locpath_trace = &lpt_right;
+    }
     eval_expr(expr->right, state);
+    state->locpath_trace = lpt;
     RET_ON_ERROR;
 
     switch (expr->op) {
@@ -1124,8 +1205,11 @@ static void eval_binary(struct expr *expr, struct state *state) {
     case OP_OR:
         eval_and_or(state, expr->op);
         break;
+    case OP_ELSE:
+        eval_else(state, expr, &lpt_right);
+        break;
     case OP_UNION:
-        eval_union(state);
+        eval_union(state, &lpt_right);
         break;
     case OP_RE_MATCH:
     case OP_RE_NOMATCH:
@@ -1189,6 +1273,14 @@ static void ns_filter(struct nodeset *ns, struct pred *predicates,
     uint old_ctx_pos = state->ctx_pos;
 
     for (int p=0; p < predicates->nexpr; p++) {
+        if ( state->has_else) {
+            for (int i=0; i < ns->used; i++) {
+                /* 1st pass, check if any else statements have match on the left */
+                /* Don't delete any nodes (yet) */
+                state->ctx = ns->nodes[i];
+                eval_pred(predicates->exprs[p], state);
+            }
+        }
         int first_bad = -1;  /* The index of the first non-matching node */
         state->ctx_len = ns->used;
         state->ctx_pos = 1;
@@ -1592,6 +1684,14 @@ static void check_binary(struct expr *expr, struct state *state) {
         ok = 1;
         res = T_BOOLEAN;
         break;
+    case OP_ELSE:
+        if (l == T_NODESET && r == T_NODESET) {
+            res = T_NODESET;
+        } else {
+            res = T_BOOLEAN;
+        }
+        ok = 1;
+        break;
     case OP_RE_MATCH:
     case OP_RE_NOMATCH:
         ok = ((l == T_STRING || l == T_NODESET) && r == T_REGEXP);
@@ -1723,6 +1823,7 @@ static void push_new_binary_op(enum binary_op op, struct state *state) {
     expr->op  = op;
     expr->right = pop_expr(state);
     expr->left = pop_expr(state);
+    expr->left_matched = false;  /* for 'else' operator only, true if any matches on LHS */
     push_expr(expr, state);
 }
 
@@ -1781,7 +1882,8 @@ static char *parse_name(struct state *state) {
          * y' as one name, but for 'x or y', we consider 'x' a name in its
          * own right. */
         if (STREQLEN(state->pos, " or ", strlen(" or ")) ||
-            STREQLEN(state->pos, " and ", strlen(" and ")))
+            STREQLEN(state->pos, " and ", strlen(" and ")) ||
+            STREQLEN(state->pos, " else ", strlen(" else ")))
             break;
 
         if (*state->pos == '\\') {
@@ -2456,11 +2558,28 @@ static void parse_or_expr(struct state *state) {
 }
 
 /*
- * Expr ::= OrExpr
+ * ElseExpr ::= OrExpr ('else' OrExpr)*
+ */
+static void parse_else_expr(struct state *state) {
+    parse_or_expr(state);
+    RET_ON_ERROR;
+    while (*state->pos == 'e' && state->pos[1] == 'l'
+        && state->pos[2] == 's' && state->pos[3] == 'e' ) {
+        state->pos += 4;
+        skipws(state);
+        parse_or_expr(state);
+        RET_ON_ERROR;
+        push_new_binary_op(OP_ELSE, state);
+        state->has_else = 1;
+    }
+}
+
+/*
+ * Expr ::= ElseExpr
  */
 static void parse_expr(struct state *state) {
     skipws(state);
-    parse_or_expr(state);
+    parse_else_expr(state);
 }
 
 static void store_error(struct pathx *pathx) {
@@ -2598,7 +2717,16 @@ int pathx_parse(const struct tree *tree,
  *************************************************************************/
 
 static bool step_matches(struct step *step, struct tree *tree) {
-    if (step->name == NULL) {
+    if ( step->axis == SEQ && step->name == NULL ) {
+        if ( tree->label == NULL )
+            return false;
+        /* label matches if it consists of numeric digits only */
+        for( char *s = tree->label; *s ; s++) {
+            if ( ! isdigit(*s) )
+                return false;
+        }
+        return true;
+    } else if (step->name == NULL) {
         return step->axis == ROOT || tree->label != NULL;
     } else {
         return streqx(step->name, tree->label);
@@ -2623,6 +2751,7 @@ static struct tree *step_root(struct step *step, struct tree *ctx,
     switch (step->axis) {
     case SELF:
     case CHILD:
+    case SEQ:
     case DESCENDANT:
     case PARENT:
     case ANCESTOR:
@@ -2654,6 +2783,7 @@ static struct tree *step_first(struct step *step, struct tree *ctx) {
         node = ctx;
         break;
     case CHILD:
+    case SEQ:
     case DESCENDANT:
         node = ctx->children;
         break;
@@ -2689,6 +2819,7 @@ static struct tree *step_next(struct step *step, struct tree *ctx,
         case SELF:
             node = NULL;
             break;
+        case SEQ:
         case CHILD:
             node = node->next;
             break;
@@ -2809,6 +2940,8 @@ static int locpath_search(struct locpath_trace *lpt,
     return result;
 }
 
+static char *step_seq_choose_name(struct pathx *path, struct tree *tree);
+
 /* Expand the tree ROOT so that it contains all components of PATH. PATH
  * must have been initialized against ROOT by a call to PATH_FIND_ONE.
  *
@@ -2855,7 +2988,12 @@ int pathx_expand_tree(struct pathx *path, struct tree **tree) {
         parent = path->origin;
 
     list_for_each(s, step) {
-        if (s->name == NULL || s->axis != CHILD)
+        if (s->axis != CHILD && s->axis != SEQ)
+            goto error;
+        if (s->axis==SEQ && s->name == NULL) {
+            s->name = step_seq_choose_name(path, parent);
+        }
+        if (s->name == NULL )
             goto error;
         struct tree *t = make_tree(strdup(s->name), NULL, parent, NULL);
         if (first_child == NULL)
@@ -2880,6 +3018,35 @@ int pathx_expand_tree(struct pathx *path, struct tree **tree) {
     *tree = NULL;
     store_error(path);
     return -1;
+}
+
+/* Generate a numeric string to use for step->name
+ * Scan tree->children for the highest numbered label, and add 1 to that
+ * numeric labels may be interspersed with #comment or other labels
+ */
+static char *step_seq_choose_name(struct pathx *path, struct tree *tree) {
+    unsigned long int max_node_n=0;
+    unsigned long int node_n;
+    char *step_name;
+    char *label_end;
+    for(tree=tree->children; tree!=NULL; tree=tree->next) {
+        if ( tree->label == NULL)
+          continue;
+        node_n=strtoul(tree->label, &label_end, 10);
+        if ( label_end == tree->label || *label_end != '\0' )
+          /* label is not a number - ignore it */
+          continue;
+        if ( node_n >= ULONG_MAX ) {
+          STATE_ERROR(path->state, PATHX_ENUMBER);
+          return NULL;
+        }
+        if( node_n > max_node_n )
+            max_node_n = node_n;
+    }
+    if (asprintf(&step_name,"%lu",max_node_n+1) >= 0)
+        return step_name;
+    else
+        return NULL;
 }
 
 int pathx_find_one(struct pathx *path, struct tree **tree) {

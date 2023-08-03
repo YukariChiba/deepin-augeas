@@ -133,8 +133,16 @@ static char *nexttoken(struct command *cmd, char **line, bool path) {
         copy = true;
         if (*s == '\\') {
             switch (*(s+1)) {
+                case ']':
                 case '[':
-                case ']':  /* pass both literally */
+                case '|':
+                case '/':
+                case '=':
+                case '(':
+                case ')':
+                case '!':
+                case ',':  /* pass them literally;
+                            * see 'name_follow' in pathx.c */
                     nescaped = 2;
                     break;
                 case 't':  /* insert tab */
@@ -160,7 +168,7 @@ static char *nexttoken(struct command *cmd, char **line, bool path) {
                     s += 1;
                     break;
                 default:
-                    ERR_REPORT(cmd, AUG_ECMDRUN, "unknown escape sequence");
+                    ERR_REPORT(cmd, AUG_ECMDRUN, "unknown escape sequence: %c", *(s+1));
                     return NULL;
             }
         }
@@ -168,7 +176,7 @@ static char *nexttoken(struct command *cmd, char **line, bool path) {
         if (nescaped == 0) {
             if (*s == '[') nbracket += 1;
             if (*s == ']') nbracket -= 1;
-            if (nbracket < 0) {
+            if (nbracket < 0 && path) {
                 ERR_REPORT(cmd, AUG_ECMDRUN, "unmatched [");
                 return NULL;
             }
@@ -998,6 +1006,35 @@ static const struct command_def cmd_source_def = {
     .help = "Print the file to which the node for PATH belongs. PATH must match\n a single node coming from some file. In particular, that means\n it must be underneath /files."
 };
 
+static void cmd_preview(struct command *cmd) {
+    const char *path = arg_value(cmd, "path");
+    char *out = NULL;
+    int r;
+
+    r = aug_preview(cmd->aug, path, &out);
+    if (r < 0 || out == NULL)
+        ERR_REPORT(cmd, AUG_ECMDRUN, "Preview of file for path %s failed", path);
+    else {
+        fprintf(cmd->out, "%s", out);
+    }
+    free(out);
+}
+
+static const struct command_opt_def cmd_preview_opts[] = {
+    { .type = CMD_PATH, .name = "path", .optional = false,
+      .help = "preview the file output which corresponds to path" },
+    CMD_OPT_DEF_LAST
+};
+
+static const struct command_def cmd_preview_def = {
+    .name = "preview",
+    .opts = cmd_preview_opts,
+    .handler = cmd_preview,
+    .synopsis = "preview the file contents for the path specified",
+    .help = "Print the file that would be written, for the file that corresponds to a path."
+    "\n The path must be within the " AUGEAS_FILES_TREE " tree."
+};
+
 static void cmd_context(struct command *cmd) {
     const char *path = arg_value(cmd, "path");
 
@@ -1486,6 +1523,7 @@ static const struct command_grp_def cmd_grp_info_def = {
         &cmd_info_def,
         &cmd_help_def,
         &cmd_source_def,
+        &cmd_preview_def,
         &cmd_def_last
     }
 };

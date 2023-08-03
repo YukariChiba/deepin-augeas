@@ -92,7 +92,7 @@ module Ssh =
                         | rekey_limit
 
     let key_re = /[A-Za-z0-9]+/
-               - /SendEnv|Host|ProxyCommand|RemoteForward|LocalForward|MACs|Ciphers|(HostKey|Kex)Algorithms|PubkeyAcceptedKeyTypes|GlobalKnownHostsFile|RekeyLimit/i
+               - /SendEnv|Host|Match|ProxyCommand|RemoteForward|LocalForward|MACs|Ciphers|(HostKey|Kex)Algorithms|PubkeyAcceptedKeyTypes|GlobalKnownHostsFile|RekeyLimit/i
 
 
     let other_entry = [ indent . key key_re
@@ -105,11 +105,29 @@ module Ssh =
     let host = [ key /Host/i . spc . value_to_eol . eol . entry* ]
 
 
+   let condition_entry =
+    let k = /[A-Za-z0-9]+/ in
+    let no_spc = Quote.do_dquote_opt (store  /[^"' \t\r\n=]+/) in
+    let with_spc = Quote.do_quote (store /[^"'\t\r\n]* [^"'\t\r\n]*/) in
+      [ spc . key k . spc . no_spc ]
+    | [ spc . key k . spc . with_spc ]
+
+   let match_cond =
+     [ label "Condition" . condition_entry+ . eol ]
+
+   let match_entry = entry
+
+   let match =
+     [ key /Match/i . match_cond
+        . [ label "Settings" .  match_entry+ ]
+     ]
+
+
 (************************************************************************
  * Group:                 LENS
  *************************************************************************)
 
-    let lns = entry* . host*
+    let lns = entry* . (host | match)*
 
     let xfm = transform lns (incl "/etc/ssh/ssh_config" .
                              incl (Sys.getenv("HOME") . "/.ssh/config") .

@@ -1,4 +1,3 @@
-usr/bin/augtool
-usr/bin/augparse
-/usr/bin/augmatch
+usr/bin/aug*
 usr/share/man/*
+usr/share/bash-completion

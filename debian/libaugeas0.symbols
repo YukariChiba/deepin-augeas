@@ -12,6 +12,7 @@ libaugeas.so.0 libaugeas0 #MINVER#
  AUGEAS_0.22.0@AUGEAS_0.22.0 1.8.0
  AUGEAS_0.23.0@AUGEAS_0.23.0 1.9.0
  AUGEAS_0.24.0@AUGEAS_0.24.0 1.10.0
+ AUGEAS_0.25.0@AUGEAS_0.25.0 1.13.0
  AUGEAS_0.8.0@AUGEAS_0.8.0 0.6.0
  __aug_close_memstream@AUGEAS_0.14.0 0.10.0
  __aug_init_memstream@AUGEAS_0.14.0 0.10.0
@@ -38,6 +39,7 @@ libaugeas.so.0 libaugeas0 #MINVER#
  aug_ns_label@AUGEAS_0.24.0 1.10.0
  aug_ns_path@AUGEAS_0.24.0 1.10.0
  aug_ns_value@AUGEAS_0.24.0 1.10.0
+ aug_preview@AUGEAS_0.25.0 1.13.0
  aug_print@AUGEAS_0.1.0 0.6.0
  aug_rename@AUGEAS_0.16.0 1.0.0
  aug_rm@AUGEAS_0.1.0 0.6.0
